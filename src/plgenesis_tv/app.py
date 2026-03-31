@@ -27,6 +27,30 @@ st.set_page_config(
 )
 
 
+def _get_opinion_values(opinion):
+    """Safely extract b, d, u, p from an opinion (object or dict).
+
+    Opinion.projected_probability() is a METHOD in jsonld-ex, not a property.
+    We compute P = b + a*u manually to avoid that footgun.
+    """
+    if opinion is None:
+        return None, None, None, None
+    if hasattr(opinion, "belief"):
+        b = float(opinion.belief)
+        d = float(opinion.disbelief)
+        u = float(opinion.uncertainty)
+        br = float(getattr(opinion, "base_rate", 0.5))
+    elif isinstance(opinion, dict):
+        b = float(opinion.get("belief", 0))
+        d = float(opinion.get("disbelief", 0))
+        u = float(opinion.get("uncertainty", 1))
+        br = float(opinion.get("base_rate", 0.5))
+    else:
+        return None, None, None, None
+    p = b + br * u
+    return b, d, u, p
+
+
 def main():
     st.title("🔍 TrustAndVerify")
     st.markdown(
@@ -151,15 +175,21 @@ def _run_verification(query: str, num_claims: int, max_sources: int):
     """Run the trustandverify pipeline."""
     try:
         from trustandverify import TrustAgent, TrustConfig
+        from trustandverify.search import TavilySearch
+        from trustandverify.llm import GeminiBackend
 
         config = TrustConfig(num_claims=num_claims, max_sources_per_claim=max_sources)
-        agent = TrustAgent(config=config)
+        agent = TrustAgent(
+            config=config,
+            search=TavilySearch(),
+            llm=GeminiBackend(),
+        )
         report = asyncio.run(agent.verify(query))
         return report
-    except ImportError:
+    except ImportError as e:
         st.error(
-            "trustandverify not installed. Run:\n"
-            "```\npip install trustandverify[tavily,gemini]\n```"
+            f"trustandverify import error: {e}\n\n"
+            "Run:\n```\npip install trustandverify[tavily,gemini]\n```"
         )
         return None
     except Exception as e:
@@ -191,17 +221,8 @@ def _display_results(report):
         }
         icon = verdict_colors.get(verdict, "❓")
 
-        # Projected probability
-        if opinion:
-            if hasattr(opinion, "projected_probability"):
-                p = opinion.projected_probability
-            else:
-                b = opinion.get("belief", 0)
-                u = opinion.get("uncertainty", 1)
-                br = opinion.get("base_rate", 0.5)
-                p = b + br * u
-        else:
-            p = None
+        # Safely extract opinion values
+        b, d, u, p = _get_opinion_values(opinion)
 
         with st.expander(f"{icon} **{verdict.upper()}** — {text[:80]}...", expanded=(i == 0)):
             col_v, col_p, col_e = st.columns(3)
@@ -209,19 +230,12 @@ def _display_results(report):
             col_p.metric("P(true)", f"{p:.3f}" if p is not None else "N/A")
             col_e.metric("Evidence", len(evidence))
 
-            if opinion:
-                if hasattr(opinion, "belief"):
-                    b, d, u = opinion.belief, opinion.disbelief, opinion.uncertainty
-                else:
-                    b = opinion.get("belief", 0)
-                    d = opinion.get("disbelief", 0)
-                    u = opinion.get("uncertainty", 1)
-
+            if b is not None:
                 st.markdown("**Subjective Logic Opinion:**")
                 col_b, col_d, col_u = st.columns(3)
-                col_b.progress(b, text=f"Belief: {b:.3f}")
-                col_d.progress(d, text=f"Disbelief: {d:.3f}")
-                col_u.progress(u, text=f"Uncertainty: {u:.3f}")
+                col_b.progress(max(0.0, min(1.0, b)), text=f"Belief: {b:.3f}")
+                col_d.progress(max(0.0, min(1.0, d)), text=f"Disbelief: {d:.3f}")
+                col_u.progress(max(0.0, min(1.0, u)), text=f"Uncertainty: {u:.3f}")
 
             if evidence:
                 st.markdown("**Evidence:**")
@@ -241,11 +255,6 @@ def _run_impulse_screening_ui(report):
 
         async def _screen():
             async with ImpulseCredibilityScorer() as scorer:
-                status = await scorer.check_status()
-                if status != "ACTIVE":
-                    st.warning(f"Impulse model status: {status}")
-                    return []
-
                 results = []
                 claims = report.claims if hasattr(report, "claims") else report.get("claims", [])
                 for claim in claims:
@@ -434,11 +443,11 @@ def _render_about_tab():
 
     | Challenge | Track |
     |---|---|
-    | Fresh Code | Protocol Labs — $5,000 |
-    | AI & Robotics | Verifiable AI — $3,000 |
-    | Impulse AI | Autonomous ML — $300 |
-    | Hypercerts | Impact Evaluation — $1,500 |
-    | Community Vote | X Engagement — $1,000 |
+    | Fresh Code | Protocol Labs |
+    | AI & Robotics | Verifiable AI |
+    | Impulse AI | Autonomous ML |
+    | Hypercerts | Impact Evaluation |
+    | Community Vote | X Engagement |
 
     ### Links
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -28,12 +29,32 @@ app = typer.Typer(
 console = Console()
 
 
+def _opinion_to_p(opinion) -> str:
+    """Safely extract projected probability from an Opinion object or dict.
+
+    Opinion.projected_probability() is a METHOD in jsonld-ex, not a property.
+    """
+    if opinion is None:
+        return "N/A"
+    if hasattr(opinion, "belief"):
+        b = float(opinion.belief)
+        u = float(opinion.uncertainty)
+        br = float(getattr(opinion, "base_rate", 0.5))
+        return f"{b + br * u:.3f}"
+    elif isinstance(opinion, dict):
+        b = opinion.get("belief", 0)
+        u = opinion.get("uncertainty", 1)
+        br = opinion.get("base_rate", 0.5)
+        return f"{b + br * u:.3f}"
+    return "N/A"
+
+
 @app.command()
 def verify(
     query: str = typer.Argument(..., help="The question or claim to verify"),
     impulse: bool = typer.Option(False, "--impulse", help="Enable Impulse AI pre-screening"),
     format: str = typer.Option("markdown", "--format", "-f", help="Output format: markdown, jsonld"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Save report JSON to file"),
     hypercert_out: Optional[str] = typer.Option(
         None, "--hypercert", help="Generate hypercert and save to this path"
     ),
@@ -64,13 +85,13 @@ def verify(
         if impulse:
             await _run_impulse_screening(report)
 
+        # Export report to JSON
+        if output:
+            _export_report(report, output)
+
         # Generate hypercert if requested
         if hypercert_out:
-            _generate_hypercert(report, hypercert_out)
-
-        # Export
-        if output:
-            _export_report(report, output, format)
+            _generate_hypercert_from_report(report, hypercert_out)
 
         return report
 
@@ -151,17 +172,7 @@ def hypercert_cmd(
     hc = report_to_hypercert(report, contributor=contributor)
     content_hash = save_hypercert(hc, output)
 
-    console.print(
-        Panel(
-            f"[green]Hypercert generated → {output}[/]\n"
-            f"Content hash: [dim]{content_hash}[/]\n\n"
-            f"Name: {hc.name}\n"
-            f"Claims verified: {hc.properties.get('total_claims', 0)}\n"
-            f"Evidence gathered: {hc.properties.get('total_evidence', 0)}\n"
-            f"Sources consulted: {hc.properties.get('unique_sources', 0)}",
-            title="Hypercert Impact Attestation",
-        )
-    )
+    _print_hypercert_summary(hc, output, content_hash)
 
 
 @app.command("train-info")
@@ -170,6 +181,9 @@ def train_info():
     from plgenesis_tv.impulse_integration import create_training_instructions
 
     console.print(create_training_instructions())
+
+
+# ── Internal helpers ─────────────────────────────────────────────────────────
 
 
 def _display_report(report) -> None:
@@ -186,22 +200,14 @@ def _display_report(report) -> None:
         if hasattr(claim, "text"):
             text = claim.text
             verdict = claim.verdict.value if hasattr(claim.verdict, "value") else str(claim.verdict)
-            p = f"{claim.opinion.projected_probability:.3f}" if claim.opinion else "N/A"
+            p = _opinion_to_p(claim.opinion)
             ev_count = str(len(claim.evidence))
         else:
             text = claim.get("text", "")
             verdict = claim.get("verdict", "unknown")
-            opinion = claim.get("opinion")
-            if opinion:
-                b = opinion.get("belief", 0)
-                u = opinion.get("uncertainty", 1)
-                br = opinion.get("base_rate", 0.5)
-                p = f"{b + br * u:.3f}"
-            else:
-                p = "N/A"
+            p = _opinion_to_p(claim.get("opinion"))
             ev_count = str(len(claim.get("evidence", [])))
 
-        # Color the verdict
         color_map = {
             "supported": "[green]",
             "contested": "[yellow]",
@@ -209,12 +215,10 @@ def _display_report(report) -> None:
             "no_evidence": "[dim]",
         }
         verdict_display = f"{color_map.get(verdict, '')}{verdict}"
-
         table.add_row(text[:50], verdict_display, p, ev_count)
 
     console.print(table)
 
-    # Summary
     summary = report.summary if hasattr(report, "summary") else report.get("summary", "")
     if summary:
         console.print(Panel(summary, title="Summary"))
@@ -232,24 +236,16 @@ async def _run_impulse_screening(report) -> None:
             )
             return
 
-        status = await scorer.check_status()
-        if status != "ACTIVE":
-            console.print(f"[yellow]Impulse model status: {status}[/]")
-            return
-
         console.print("\n[bold]Impulse AI Pre-Screening:[/]")
         claims = report.claims if hasattr(report, "claims") else report.get("claims", [])
 
         for claim in claims:
-            # Convert to dict if needed
             if hasattr(claim, "__dict__"):
                 claim_dict = _claim_to_dict(claim)
             else:
                 claim_dict = claim
 
             features = extract_claim_features(claim_dict)
-            from dataclasses import asdict
-
             feat_dict = asdict(features)
             result = await scorer.predict_claim(feat_dict)
 
@@ -264,8 +260,52 @@ async def _run_impulse_screening(report) -> None:
                 console.print(f"  {text[:40]}... → [dim]Impulse unavailable[/]")
 
 
+def _generate_hypercert_from_report(report, output_path: str) -> None:
+    """Generate a Hypercert from a live Report object (not a JSON file)."""
+    from plgenesis_tv.hypercerts_integration import report_to_hypercert, save_hypercert
+
+    # Convert Report object to dict
+    if hasattr(report, "claims"):
+        report_dict = {
+            "id": report.id if hasattr(report, "id") else "unknown",
+            "query": report.query if hasattr(report, "query") else "",
+            "claims": [_claim_to_dict(c) for c in report.claims],
+            "summary": report.summary if hasattr(report, "summary") else "",
+            "created_at": str(report.created_at) if hasattr(report, "created_at") else "",
+        }
+    else:
+        report_dict = report
+
+    hc = report_to_hypercert(report_dict)
+    content_hash = save_hypercert(hc, output_path)
+    _print_hypercert_summary(hc, output_path, content_hash)
+
+
+def _print_hypercert_summary(hc, output_path: str, content_hash: str) -> None:
+    """Print a Hypercert summary to the console."""
+    console.print(
+        Panel(
+            f"[green]Hypercert generated → {output_path}[/]\n"
+            f"Content hash: [dim]{content_hash}[/]\n\n"
+            f"Name: {hc.name}\n"
+            f"Claims verified: {hc.properties.get('total_claims', 0)}\n"
+            f"Evidence gathered: {hc.properties.get('total_evidence', 0)}\n"
+            f"Sources consulted: {hc.properties.get('unique_sources', 0)}",
+            title="Hypercert Impact Attestation",
+        )
+    )
+
+
 def _claim_to_dict(claim) -> dict:
-    """Convert a trustandverify Claim object to a dict."""
+    """Convert a trustandverify Claim object to a dict.
+
+    Interfaces used (from trustandverify.core.models):
+      Claim:    .text, .evidence, .opinion, .verdict, .assessment
+      Evidence: .text, .supports_claim, .relevance, .confidence_raw, .source, .opinion
+      Source:   .url, .title, .content_snippet, .trust_score, .source_type
+      Opinion:  .belief, .disbelief, .uncertainty, .base_rate (all float attrs)
+      Verdict:  .value (str from enum)
+    """
     evidence_list = []
     for ev in claim.evidence:
         ev_dict = {
@@ -306,11 +346,17 @@ def _claim_to_dict(claim) -> dict:
     }
 
 
-def _export_report(report, output: str, format: str) -> None:
-    """Export report to file."""
-    # Simple JSON export for now
-    if hasattr(report, "__dict__"):
-        data = json.loads(json.dumps(report, default=str))
+def _export_report(report, output: str) -> None:
+    """Export report to JSON file."""
+    if hasattr(report, "claims"):
+        data = {
+            "id": report.id,
+            "query": report.query,
+            "claims": [_claim_to_dict(c) for c in report.claims],
+            "summary": report.summary,
+            "created_at": str(report.created_at),
+            "metadata": report.metadata,
+        }
     else:
         data = report
 
