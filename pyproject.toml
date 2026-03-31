@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "plgenesis-trustandverify"
+version = "0.1.0"
+description = "Verifiable AI Knowledge Verification with Autonomous ML Credibility Scoring — PL Genesis Hackathon"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Muntaser Syed", email = "jemsbhai@users.noreply.github.com"},
+]
+keywords = [
+    "verifiable-ai", "subjective-logic", "knowledge-verification",
+    "impulse-ai", "hypercerts", "protocol-labs", "hackathon",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "trustandverify>=0.1.0",
+    "jsonld-ex>=0.7.0",
+    "httpx>=0.24",
+    "pandas>=2.0",
+    "python-dotenv>=1.0",
+    "typer[all]>=0.9",
+    "rich>=13.0",
+    "streamlit>=1.30",
+]
+
+[project.optional-dependencies]
+impulse = ["impulse-api-sdk-python"]
+dev = ["pytest", "pytest-asyncio", "pytest-cov", "ruff"]
+
+[project.scripts]
+plgenesis-tv = "plgenesis_tv.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/jemsbhai/plgenesis-trustandverify"
+Repository = "https://github.com/jemsbhai/plgenesis-trustandverify"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/plgenesis_tv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 99
+target-version = "py310"
