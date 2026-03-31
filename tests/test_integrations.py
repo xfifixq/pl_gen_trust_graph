@@ -279,6 +279,14 @@ class TestImpulseIntegration:
         low = ImpulsePrediction("refuted", 0.3, {})
         assert low.confidence_label == "low"
 
+    def test_verdict_index_map(self):
+        from plgenesis_tv.impulse_integration import VERDICT_INDEX_MAP
+
+        assert VERDICT_INDEX_MAP[0] == "contested"
+        assert VERDICT_INDEX_MAP[1] == "no_evidence"
+        assert VERDICT_INDEX_MAP[2] == "refuted"
+        assert VERDICT_INDEX_MAP[3] == "supported"
+
     def test_scorer_not_available_without_config(self):
         from plgenesis_tv.impulse_integration import ImpulseCredibilityScorer
 

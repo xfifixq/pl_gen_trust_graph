@@ -25,6 +25,16 @@ load_dotenv()
 
 IMPULSE_BASE_URL = "https://inference.impulselabs.ai"
 
+# Impulse AI returns integer class indices — map back to verdict labels.
+# Alphabetical order matches pandas/sklearn default label encoding.
+VERDICT_INDEX_MAP: dict[int, str] = {
+    0: "contested",
+    1: "no_evidence",
+    2: "refuted",
+    3: "supported",
+}
+VERDICT_LABELS = list(VERDICT_INDEX_MAP.values())
+
 
 @dataclass
 class ImpulsePrediction:
@@ -57,8 +67,12 @@ class ImpulseCredibilityScorer:
         api_key: str | None = None,
         deployment_id: str | None = None,
     ):
-        self.api_key = api_key or os.getenv("IMPULSE_API_KEY", "")
-        self.deployment_id = deployment_id or os.getenv("IMPULSE_DEPLOYMENT_ID", "")
+        # Use `is not None` so passing "" explicitly works (doesn't fall through to env)
+        self.api_key = api_key if api_key is not None else os.getenv("IMPULSE_API_KEY", "")
+        self.deployment_id = (
+            deployment_id if deployment_id is not None
+            else os.getenv("IMPULSE_DEPLOYMENT_ID", "")
+        )
         self._client = httpx.AsyncClient(
             base_url=IMPULSE_BASE_URL,
             headers={
@@ -116,9 +130,30 @@ class ImpulseCredibilityScorer:
         resp.raise_for_status()
         data = resp.json()
 
+        # Impulse multiclass API returns:
+        #   prediction = binary flag (1 = classified)
+        #   probability = class index as float (e.g. 3.0 = class 3)
+        # For multiclass, the class index is in the "probability" field.
+        raw_prediction = data.get("prediction", -1)
+        raw_prob = float(data.get("probability", 0.0))
+
+        # Determine which field holds the class index:
+        # - If probability > 1, it's a class index (real probabilities are 0-1)
+        # - Otherwise fall back to prediction as the class index
+        if raw_prob > 1.0:
+            # probability field contains the class index
+            class_idx = int(raw_prob)
+            confidence = 1.0  # Model is categorical, no soft probability available
+        else:
+            # Standard case: prediction is class index, probability is confidence
+            class_idx = int(raw_prediction)
+            confidence = raw_prob
+
+        verdict_label = VERDICT_INDEX_MAP.get(class_idx, f"class_{class_idx}")
+
         return ImpulsePrediction(
-            predicted_verdict=str(data.get("prediction", "unknown")),
-            probability=float(data.get("probability", 0.0)),
+            predicted_verdict=verdict_label,
+            probability=confidence,
             raw_response=data,
         )
 
