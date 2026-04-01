@@ -1,0 +1,2 @@
+# Streamlit Community Cloud: install this project and its dependencies from pyproject.toml
+-e .
